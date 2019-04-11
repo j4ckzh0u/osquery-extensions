@@ -1,9 +1,23 @@
 #include <bcc/BPF.h>
+
+#include <atomic>
 #include <iostream>
 
+#include <signal.h>
+
+// clang-format off
+#include <probes/types.h>
 #include <probes/common.h>
 #include <probes/execve.h>
-#include <probes/types.h>
+// clang-format on
+
+std::atomic_bool terminate{false};
+
+void sigIntHandler(int s) {
+  if (s == SIGINT) {
+    terminate = true;
+  }
+}
 
 void eventCallback(void *, void *data, int byte_count) {
   static_cast<void>(data);
@@ -11,12 +25,16 @@ void eventCallback(void *, void *data, int byte_count) {
 }
 
 int main() {
+  std::cout << "Initializing the BPF program...\n";
+
   ebpf::BPF bpf;
   auto s = bpf.init(probes::execve);
   if (s.code() != 0) {
     std::cerr << "Initialization error: " << s.msg() << "\n";
     return 1;
   }
+
+  std::cout << "Opening the perf events buffer...\n";
 
   // clang-format off
   auto status = bpf.open_perf_buffer(
@@ -37,18 +55,22 @@ int main() {
     return 1;
   }
 
+  std::cout << "Attaching tracepoints...\n";
+
   status =
       bpf.attach_tracepoint("syscalls:sys_enter_execve", "on_execve_enter");
+
   if (status.code() != 0) {
     std::cerr << "Failed to attach the tracepoint: " << status.msg() << "\n";
     return 1;
   }
 
-  status = bpf.poll_perf_buffer("events");
-  if (status.code() != 0) {
-    std::cerr << "poll failed on the perf events buffer: " << status.msg()
-              << "\n";
-    return 1;
+  std::cout << "Installing the SIGINT handler...\n";
+  signal(SIGINT, sigIntHandler);
+
+  std::cout << "Entering poll loop..\n";
+  while (!terminate) {
+    status = bpf.poll_perf_buffer("events");
   }
 
   return 0;
