@@ -1,31 +1,20 @@
 #include <linux/sched.h>
 
+/// How many keys we have inside the event data map
+#define EVENT_MAP_SIZE 1000
+
+/// How many keys we have inside the string data map
+#define STRING_MAP_SIZE 1000
+
+// clang-format off
+#define INCREMENT_MAP_INDEX_BY(idx, amount, map_size) \
+  idx = ((idx + amount) & 0x00FFFFFFUL) % map_size
 // clang-format on
 
 // clang-format off
-#define CREATE_EVENT_ID(id, is_tracepoint, is_enter_event) \
-  (((u64) id) | ((u64) (is_tracepoint != 0 : 0x8000000000000000ULL)) | ((u64) (is_enter_event ? != 0 : 0x4000000000000000ULL)))
+#define INCREMENT_MAP_INDEX(idx, map_size) \
+  INCREMENT_MAP_INDEX_BY(idx, 1, map_size)
 // clang-format on
-
-// clang-format off
-#define CREATE_TRACEPOINT_EVENT_ID(id, is_enter_event) \
-  CREATE_EVENT_ID(id, 1, is_enter_event)
-// clang-format on
-
-// clang-format off
-#define CREATE_KPROBE_EVENT_ID(id, is_enter_event) \
-  CREATE_EVENT_ID(id, 0, is_enter_event)
-// clang-format on
-
-/// Base event data structure
-typedef struct {
-  u8 buffer[EVENT_BUFFER_SIZE];
-} EventData;
-
-/// Base string data structure
-typedef struct {
-  u8 buffer[STRING_BUFFER_SIZE];
-} StringData;
 
 //
 // BPF maps
@@ -106,12 +95,16 @@ static int saveStringFromAddress(const void *string_ptr, int *external_index) {
 }
 
 /// Populates the event header
-static void fillEventHeader(EventHeader *event_header, int event_id) {
+static void fillEventHeader(EventHeader *event_header, u64 event_id) {
   event_header->id = event_id;
-  event_header->timestamp = 1;
-  event_header->pid_tgid = 2;
-  event_header->parent_tgid = 3;
-  event_header->uid_gid = 4;
+  event_header->timestamp = bpf_ktime_get_ns();
+  event_header->pid_tgid = bpf_get_current_pid_tgid();
+  event_header->uid_gid = bpf_get_current_uid_gid();
+
+  const struct task_struct *current_task =
+      (const struct task_struct *)bpf_get_current_task();
+
+  event_header->parent_tgid = current_task->real_parent->tgid;
 }
 
 /// Generates an external index (i.e. index + cpu id)
@@ -134,7 +127,8 @@ int on_execve_enter(struct tracepoint__syscalls__sys_enter_execve *args) {
 
   ExecveEnterEventData *event = (ExecveEnterEventData *)event_data_slot->buffer;
 
-  fillEventHeader(&event->header, EVENTID_EXECVE);
+  fillEventHeader(&event->header,
+                  CREATE_TRACEPOINT_EVENT_ID(EVENTID_SYSENTEREXECVE, 1));
   saveString(args->filename, &event->filename);
 
   int external_string_index = 0;
@@ -151,17 +145,5 @@ int on_execve_enter(struct tracepoint__syscalls__sys_enter_execve *args) {
   }
 
   events.perf_submit(args, &event_index, sizeof(event_index));
-  return 0;
-}
-
-int on_execve_exit(struct tracepoint__syscalls__sys_exit_execve *args) {
-  return 0;
-}
-
-int on_execveat_enter(struct tracepoint__syscalls__sys_enter_execveat *args) {
-  return 0;
-}
-
-int on_execveat_exit(struct tracepoint__syscalls__sys_exit_execveat *args) {
   return 0;
 }

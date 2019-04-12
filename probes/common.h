@@ -1,39 +1,45 @@
-/// How many keys we have inside the event data map
-#define EVENT_MAP_SIZE 50
+#ifdef __cplusplus
+#include <cstdint>
 
-/// How many keys we have inside the string data map
-#define STRING_MAP_SIZE 50
+using u8 = std::uint8_t;
+using u64 = std::uint64_t;
+#endif
 
 /// Event buffer size; this must be big enough to hold the biggest event data
 /// structure
 #define EVENT_BUFFER_SIZE sizeof(ExecveEnterEventData)
 
 /// String buffer size
-#define STRING_BUFFER_SIZE 100
+#define STRING_BUFFER_SIZE 2048
+
+//
+// Event IDs and related utilities
+//
 
 // clang-format off
-#define INCREMENT_MAP_INDEX_BY(idx, amount, map_size) \
-  idx = ((idx + amount) & 0x00FFFFFFUL) % map_size
+#define CREATE_EVENT_ID(id, is_tracepoint, is_enter_event) \
+  (((u64) id) | ((u64) (is_tracepoint != 0 ? 0x8000000000000000ULL : 0)) | ((u64) (is_enter_event != 0 ? 0x4000000000000000ULL : 0)))
 // clang-format on
 
 // clang-format off
-#define INCREMENT_MAP_INDEX(idx, map_size) \
-  INCREMENT_MAP_INDEX_BY(idx, 1, map_size)
+#define CREATE_TRACEPOINT_EVENT_ID(id, is_enter_event) \
+  CREATE_EVENT_ID(id, 1, is_enter_event)
 // clang-format on
 
-//
-// Event IDs
-//
+// clang-format off
+#define CREATE_KPROBE_EVENT_ID(id, is_enter_event) \
+  CREATE_EVENT_ID(id, 0, is_enter_event)
+// clang-format on
 
-#define EVENTID_OPEN 1
-#define EVENTID_CREAT 2
-#define EVENTID_OPENAT 2
-#define EVENTID_EXECVE 3
-#define EVENTID_EXECVEAT 4
+#define EVENTID_SYSENTEREXECVE 1
 
 //
 // Event data structures
 //
+
+#ifdef __cplusplus
+#pragma pack(push, 1)
+#endif
 
 typedef int StringIndex;
 
@@ -48,27 +54,31 @@ typedef struct {
 typedef struct {
   EventHeader header;
 
-  int dirfd;
-  StringIndex pathname;
-  int flags;
-  int mode;
-} OpenEnterEventData;
-
-typedef struct {
-  EventHeader header;
-  int exit_code;
-} OpenExitEventData;
-
-typedef struct {
-  EventHeader header;
-
   StringIndex filename;
 
   int argc;
   StringIndex argv[20];
 } ExecveEnterEventData;
 
+// Base data structures
 typedef struct {
-  EventHeader header;
-  int exit_code;
-} ExecveExitEventData;
+  u8 buffer[EVENT_BUFFER_SIZE];
+} EventData;
+
+typedef struct {
+  u8 buffer[STRING_BUFFER_SIZE];
+} StringData;
+
+#ifdef __cplusplus
+union EventDataObject final {
+  ExecveEnterEventData sys_enter_execve;
+};
+
+static_assert(sizeof(EventDataObject) == EVENT_BUFFER_SIZE,
+              "The event buffer size must be equal to EVENT_BUFFER_SIZE");
+
+static_assert(EVENT_BUFFER_SIZE % 8 == 0,
+              "The event buffer size must be aligned to 8 bytes");
+
+#pragma pack(pop)
+#endif
